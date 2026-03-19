@@ -1,100 +1,63 @@
 `timescale 1ns / 1ps
 
-module cordic_top_tb();
+module cordic_all_modes_tb;
 
-    // Inputs
-    reg clk;
-    reg rst_n;
-    reg start;
-    reg mode;
-    reg signed [15:0] x_in;
-    reg signed [15:0] y_in;
-    reg signed [15:0] z_in;
-
-    // Outputs
-    wire signed [15:0] x_out;
-    wire signed [15:0] y_out;
-    wire signed [15:0] z_out;
+    reg clk, rst_n, start;
+    reg [1:0] mode;
+    reg signed [15:0] x_in, y_in, z_in;
+    wire signed [15:0] x_out, y_out, z_out;
     wire done;
 
-    // Instantiate the Unit Under Test (UUT)
     cordic_top uut (
-        .clk(clk),
-        .rst_n(rst_n),
-        .start(start),
-        .mode(mode),
-        .x_in(x_in),
-        .y_in(y_in),
-        .z_in(z_in),
-        .x_out(x_out),
-        .y_out(y_out),
-        .z_out(z_out),
-        .done(done)
+        .clk(clk), .rst_n(rst_n), .start(start), .mode(mode), 
+        .x_in(x_in), .y_in(y_in), .z_in(z_in), 
+        .x_out(x_out), .y_out(y_out), .z_out(z_out), .done(done)
     );
 
-    // Clock Generation: 100 MHz (10ns period)
     always #5 clk = ~clk;
 
+    // Helper task to run a test and print results
+    task run_test(input [1:0] m, input [15:0] x, input [15:0] y, input [15:0] z, input [127:0] name);
+        begin
+            mode = m; x_in = x; y_in = y; z_in = z;
+            start = 1; #10 start = 0;
+            wait(done);
+            #10;
+            $display("TEST: %s", name);
+            $display("OUT -> X: %h (%f), Y: %h (%f), Z: %h (%f)", 
+                      x_out, $itor(x_out)/16384.0, 
+                      y_out, $itor(y_out)/16384.0, 
+                      z_out, $itor(z_out)/16384.0);
+            $display("---------------------------------------");
+            #50;
+        end
+    endtask
+
     initial begin
-        // Initialize Inputs
-        clk = 0;
-        rst_n = 0;
-        start = 0;
-        mode = 0;
-        x_in = 0;
-        y_in = 0;
-        z_in = 0;
+        clk = 0; rst_n = 0; start = 0;
+        #20 rst_n = 1; #20;
 
-        // Reset system
-        #100;
-        rst_n = 1;
-        #20;
+        // 1. CIRCULAR ROTATION (Mode 00)
+        // Rotate (0.607, 0) by 30 degrees. 30 deg in Q2.14 = 16'h2183
+        // Expect: X = cos(30)*0.607*1.647 = 0.866, Y = sin(30) = 0.5
+        run_test(2'b00, 16'h26DD, 16'h0000, 16'h2183, "Circular Rotation (30 deg)");
 
-        // --- OPERATION 1: CIRCULAR ROTATION (Sine/Cosine) ---
-        // Target: Calculate Sin(30) and Cos(30)
-        // x_in = 1/Gain (0.607) = 16'h26DD
-        // z_in = 30 degrees (Q2.14) = 16'h2183
-        $display("STARTING TEST 1: Circular Rotation (30 Degrees)");
-        mode = 1'b0; 
-        x_in = 16'h26DD; 
-        y_in = 16'h0000;
-        z_in = 16'h2183;
-        
-        @(posedge clk);
-        start = 1;
-        @(posedge clk);
-        start = 0;
+        // 2. CIRCULAR VECTORING (Mode 01)
+        // Find Magnitude/Angle of X=0.5, Y=0.5 (16'h2000, 16'h2000)
+        // Expect: X = Mag * Gain = 0.707 * 1.647 = 1.16, Z = 45 deg (16'h3243)
+        run_test(2'b01, 16'h2000, 16'h2000, 16'h0000, "Circular Vectoring (0.5, 0.5)");
 
-        // Wait for hardware to finish 16 iterations
-        @(posedge done);
-        #10;
-        $display("RESULT 1: Cos(30)=%f, Sin(30)=%f", $itor(x_out)/16384.0, $itor(y_out)/16384.0);
-        
-        #100;
+        // 3. LINEAR ROTATION (Mode 10) - Multiplication
+        // y_out = y_in + (x_in * z_in). Let X=0.5, Z=0.5, Y=0
+        // Expect: Y = 0.25 (16'h1000)
+        run_test(2'b10, 16'h2000, 16'h0000, 16'h2000, "Linear Rotation (Multiply)");
 
-        // --- OPERATION 2: LINEAR VECTORING (Division) ---
-        // Target: Calculate 0.25 / 0.50
-        // y_in (Dividend) = 0.25 = 16'h1000
-        // x_in (Divisor)  = 0.50 = 16'h2000
-        // Result expected in z_out: 0.50 (16'h2000)
-        $display("STARTING TEST 2: Linear Vectoring (Division: 0.25 / 0.5)");
-        mode = 1'b1;
-        x_in = 16'h2000; 
-        y_in = 16'h1000; 
-        z_in = 16'h0000;
+        // 4. LINEAR VECTORING (Mode 11) - Division
+        // z_out = z_in + (y_in / x_in). Let Y=0.25, X=0.5, Z=0
+        // Expect: Z = 0.5 (16'h2000)
+        run_test(2'b11, 16'h2000, 16'h1000, 16'h0000, "Linear Vectoring (Division)");
 
-        @(posedge clk);
-        start = 1;
-        @(posedge clk);
-        start = 0;
-
-        @(posedge done);
-        #10;
-        $display("RESULT 2: Division Result = %f", $itor(z_out)/16384.0);
-
-        #100;
-        $display("ALL TESTS COMPLETED.");
-        $finish;
+        #100 $finish;
     end
 
 endmodule
